@@ -1,14 +1,11 @@
-from IPython.display import Image, display
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
+
 
 def display_graph(graph):
-    display(
-        Image(
-            graph.get_graph().draw_mermaid_png()
-        )
-    )
+    image_bytes = graph.get_graph().draw_mermaid_png()
+    # img = Image(graph.get_graph().draw_mermaid_png())
+    with open("graph.png", "wb") as png:
+        png.write(image_bytes)
 
 def print_messages(messages):
     print("--- Number of messages:", len(messages), "---")

@@ -1,66 +1,70 @@
 from langchain_openai import ChatOpenAI
 import os
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.tools import tool, BaseTool
 from dotenv import load_dotenv
 from bot_state import BotState
 from utils import print_messages
+from typing import Dict
+from tavily import TavilyClient
+from mlflow.entities import SpanType
+import mlflow
+import logging
 
-import json
+logger = logging.getLogger(__name__)
 
 system_prompt = """
-You are a helpful, polite, and knowledgeable AI assistant designed to help patients learn about health-related topics or medical conditions.
+You are an AI assistant that helps patients learn about health-related topics and medical conditions. 
+You guide users by recognizing relevant medical questions, retrieving accurate information, 
+and explaining it in a way that’s clear, supportive, and easy for non-experts to understand.
 
-## Your primary task is to:
-1. Understand the user's input.
-2. Determine whether it is related to a health topic or medical condition.
-3. If it is health-related, extract or rephrase the input into concise and relevant search keywords.
-4. If it is unclear or not health-related, generate a polite clarification message asking the user to clarify their intent.
-5. Always return a structured JSON object with the appropriate fields.
+You have access to the following tools to support your tasks.
+## Available Tools
+* tool_search_query(keywords: str)
+  Use this tool when the user's question is clearly health-related. 
+  Convert the question into concise search keywords that help retrieve information about the topic’s definition, 
+  causes, symptoms, and treatment.
+* tool_clarification(message: str)
+  Use this tool when the user's input is unclear or not related to health. Provide a polite clarification prompt. 
+  This tool will return the user's clarified input as a string, which you must treat as a new query and re-evaluate.
+  
+## Your Responsibilities
+1. Interpret the user’s query
+  Determine if the input is clearly about a health topic, symptom, condition, treatment, or medical process.
+2. If the query is health-related:
+  * Rephrase it into concise search keywords (e.g., “diabetes causes symptoms treatment”).
+  * Use the tool tool_search_query(keywords) to retrieve information.
+  * Once the result is returned, write a clear, friendly, and accurate summary covering:
+    * What the condition or topic is
+    * Its causes or risk factors
+    * Common symptoms
+    * Treatments or management options
+3. If the query is not clearly health-related or is vague:
+  * Use tool_clarification(message) to ask the user (politely) to clarify or rephrase their question with a health-related focus.
+  * Once the clarified message is returned, process it as if it were a new user input — go back to step 1.
+    
+## Examples of Appropriate Inputs for tool_search_query
+* "COVID" → "COVID-19 overview symptoms treatment prevention"
+* “What causes asthma?” → "asthma causes symptoms treatment"
+* “Tell me about high cholesterol” → "high cholesterol explanation causes symptoms treatment"
+* “I want to learn about depression” → "depression causes symptoms treatment"
 
-## Expected JSON Output Format
-You must always output a JSON object in this exact format:
-{
-  "search_query": "keywords or null",
-  "clarification_message": "message or null"
-}
-* If the input is clearly health-related, include meaningful search keywords in search_query and set clarification_message to null.
-* If the input is not health-related or too vague, set search_query to null and provide a helpful clarification_message.
-
-## How to Determine if a Query is Health-Related
-The user's input is considered health-related if it refers to:
-* A medical condition (e.g., diabetes, asthma, cancer)
-* A symptom (e.g., chest pain, fatigue, headaches)
-* A health process or procedure (e.g., vaccination, surgery)
-* A treatment or medication (e.g., chemotherapy, antibiotics)
-* Wellness or prevention (e.g., nutrition, sleep hygiene, mental health)
-* Anatomy or bodily functions (e.g., liver function, blood pressure)
-
-## If Health-Related: Generate Search Keywords
-Your goal is to construct a keyword string that helps retrieve useful information on the following aspects of the health topic:
-* Explanation or overview
-* Causes and risk factors
-* Symptoms or warning signs
-* Treatment options
-Example Transformations:
-| User Input                        | Search Query                                             |
-| --------------------------------- | -------------------------------------------------------- |
-| "What causes asthma?"             | "asthma causes symptoms treatment"                       |
-| "Tell me about high cholesterol"  | "high cholesterol explanation causes symptoms treatment" |
-| "I want to know about depression" | "depression overview causes symptoms treatment"          |
-
-## If Not Health-Related or Unclear: Ask for Clarification
-For inputs that are:
-* Unrelated to health (e.g., “Tell me about electric cars”)
-* Too vague (e.g., “I want to learn something”)
-* Ambiguous (e.g., “Tell me more”)
-Politely ask the user to rephrase or provide a health-related topic.
-Examples of clarification messages:
+## Examples Needing tool_clarification
+* “What’s the best laptop?”
+* “Tell me more”
+* “I want to learn something”
+Use a response like:
 “Could you please clarify what health topic or medical condition you’d like to learn about?”
-“I’m here to help with health-related questions. Can you tell me what medical condition or symptom you're interested in?”
 
 ## Tone
-* Be professional, empathetic, and encouraging.
-* Guide the user toward asking clear, health-related questions without judgment.
+* Always be respectful, supportive, and clear.
+* Avoid medical jargon; use simple explanations.
+* Encourage curiosity and self-learning.
+
+## Important Notes
+* You must use the available tools to respond: either tool_search_query() or tool_clarification().
+* If you receive a clarified input from the tool_clarification() tool, treat it exactly as if the user just asked it.
+* Do not fabricate information — only summarize after retrieving valid content from tool_search_query.
 """
 
 # Load configurations
@@ -68,14 +72,43 @@ load_dotenv('config.env')
 assert os.getenv('OPENAI_API_KEY') is not None
 assert os.getenv('TAVILY_API_KEY') is not None
 
-def create_llm():
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.0,
-    )
-    return llm
 
-llm = create_llm()
+@tool
+@mlflow.trace(span_type=SpanType.TOOL)
+def tool_clarification(message: str) -> str:
+    """
+    This tool would prompt the message to the user and ask the user to clarify the query.
+    :param message: The message to ask the user to clarify
+    :return: The user's response
+    """
+    user_clarification = input(message + "\n")
+    return user_clarification
+
+
+@tool
+@mlflow.trace(span_type=SpanType.TOOL)
+def tool_search_query(keywords: str) -> Dict:
+    """
+    This tool would search the passed in keywords using the Tavily client
+    :param keywords: The keywords to search for
+    :return: The search results
+    """
+    logger.debug(f"Start Tavily searching with keywords: {keywords}")
+    tavily_client = TavilyClient(api_key=os.getenv('TAVILY_API_KEY'))
+    response = tavily_client.search(keywords)
+    return response
+
+
+tools = [tool_clarification, tool_search_query]
+
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.0,
+)
+
+tools_by_name: dict[str, BaseTool] = {_tool.name: _tool for _tool in tools}
+llm = llm.bind_tools(tools)
+
 
 def node_init_user_query(state: BotState) -> BotState:
     """
@@ -86,62 +119,53 @@ def node_init_user_query(state: BotState) -> BotState:
         SystemMessage(system_prompt),
         HumanMessage(user_query)
     ]
-    return { "messages": messages }
+    return {
+        "messages": messages,
+        "user_query": user_query,
+    }
 
-def node_validate_user_query(state: BotState) -> BotState:
+
+def node_health_agent(state: BotState) -> BotState:
     """
     Let AI validate whether the user's input is health-related.
     Returns the AI response which indicates whether needs clarification or should start search
     """
     messages = state["messages"]
     ai_message = llm.invoke(messages)
-    # Mock AI message
-    # ai_message = AIMessage('{\n  "search_query": "COVID-19 overview symptoms treatment prevention",\n  "clarification_message": null\n}')
+    return {"messages": ai_message}
 
-    json_msg = json.loads(ai_message.content)
-    return {
-        "messages": ai_message,
-        "clarification_message": json_msg["clarification_message"],
-        "search_query": json_msg["search_query"]
-    }
 
-def clarify_or_search(state: BotState):
+def node_tools(state: BotState) -> BotState:
+    # print_messages(state["messages"])
+    result = []
+
+    for tool_call in state["messages"][-1].tool_calls:
+        tool = tools_by_name[tool_call["name"]]
+        ret = tool.invoke({**tool_call["args"]})
+        if tool_call["name"] == "tool_clarification":
+            state["clarification_message"] = tool_call["args"]["message"]
+            state["user_query"] = ret
+        if tool_call["name"] == "tool_search_query":
+            state["search_query"] = tool_call["args"]["keywords"]
+        result.append(
+            ToolMessage(content=ret, tool_call_id=tool_call["id"])
+        )
+    state["messages"].extend(result)
+    return state
+
+
+def route_clarify_or_search(state: BotState):
     """
     Check the AI response to decide whether needs clarification or can start to search
     """
     # print_messages(state["messages"])
-    clarification = state["clarification_message"]
-    search = state["search_query"]
-    if clarification is not None:
-        return node_clarify_query.__name__
-    if search is not None:
-        return node_search_query.__name__
-    raise ValueError("Invalid state")
-
-def node_clarify_query(state: BotState) -> BotState:
-    """
-    Display the clarification message and let the user enter query again
-    """
-    clarification_message = state["clarification_message"]
-    user_clarification = input(clarification_message + "\n")
-    return { "messages": HumanMessage(user_clarification), "clarification_message": None }
-
-def node_search_query(state: BotState) -> BotState:
-    """
-    Search with the AI
-    """
-    search_query = state["search_query"]
+    last_message = state["messages"][-1]
+    if last_message.tool_calls:
+        return node_tools.__name__
+    return node_summary.__name__
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+def node_summary(state: BotState) -> BotState:
+    last_message = state["messages"][-1]
+    # last_message.pretty_print()
+    return {"search_summary": last_message.content}

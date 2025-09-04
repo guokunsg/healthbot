@@ -14,3 +14,6 @@ __pycache__/
 tmp/
 
 config.env
+
+mlflow.db
+mlartifacts
