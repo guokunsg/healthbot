@@ -4,6 +4,7 @@
 # Virtual environment
 venv/
 env/
+.venv
 
 # Python bytecode and compiled files
 *.pyc
@@ -17,3 +18,4 @@ config.env
 
 mlflow.db
 mlartifacts
+mlruns

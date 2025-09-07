@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from langchain_openai import ChatOpenAI
 import os
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -101,20 +103,22 @@ def tool_search_query(keywords: str) -> Dict:
 
 tools = [tool_clarification, tool_search_query]
 
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.0,
-)
+@lru_cache(maxsize=1)
+def create_llm():
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0.0,
+    )
 
-tools_by_name: dict[str, BaseTool] = {_tool.name: _tool for _tool in tools}
-llm = llm.bind_tools(tools)
+    llm = llm.bind_tools(tools)
+    return llm
 
 
 def node_init_user_query(state: BotState) -> BotState:
     """
     Prompt a message to the user and get the user's initial query message
     """
-    user_query = input(state["init_message"])
+    user_query = state["user_query"]
     messages = [
         SystemMessage(system_prompt),
         HumanMessage(user_query)
@@ -131,7 +135,9 @@ def node_health_agent(state: BotState) -> BotState:
     Returns the AI response which indicates whether needs clarification or should start search
     """
     messages = state["messages"]
+    llm = create_llm()
     ai_message = llm.invoke(messages)
+    logger.debug(f"AI message: {ai_message}")
     return {"messages": ai_message}
 
 
@@ -140,12 +146,15 @@ def node_tools(state: BotState) -> BotState:
     result = []
 
     for tool_call in state["messages"][-1].tool_calls:
-        tool = tools_by_name[tool_call["name"]]
-        ret = tool.invoke({**tool_call["args"]})
+        # tool = tools_by_name[tool_call["name"]]
+        # ret = tool.invoke({**tool_call["args"]})
+        ret = None
         if tool_call["name"] == "tool_clarification":
+            ret = tool_clarification({**tool_call["args"]})
             state["clarification_message"] = tool_call["args"]["message"]
             state["user_query"] = ret
         if tool_call["name"] == "tool_search_query":
+            ret = tool_search_query({**tool_call["args"]})
             state["search_query"] = tool_call["args"]["keywords"]
         result.append(
             ToolMessage(content=ret, tool_call_id=tool_call["id"])
