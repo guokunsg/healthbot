@@ -6,7 +6,6 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 from langchain_core.tools import tool, BaseTool
 from dotenv import load_dotenv
 from bot_state import BotState
-from utils import print_messages
 from typing import Dict
 from tavily import TavilyClient
 from mlflow.entities import SpanType
@@ -150,11 +149,11 @@ def node_tools(state: BotState) -> BotState:
         # ret = tool.invoke({**tool_call["args"]})
         ret = None
         if tool_call["name"] == "tool_clarification":
-            ret = tool_clarification({**tool_call["args"]})
+            ret = tool_clarification.invoke({**tool_call["args"]})
             state["clarification_message"] = tool_call["args"]["message"]
             state["user_query"] = ret
         if tool_call["name"] == "tool_search_query":
-            ret = tool_search_query({**tool_call["args"]})
+            ret = tool_search_query.invoke({**tool_call["args"]})
             state["search_query"] = tool_call["args"]["keywords"]
         result.append(
             ToolMessage(content=ret, tool_call_id=tool_call["id"])

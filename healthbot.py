@@ -1,3 +1,6 @@
+from langgraph.types import Command
+
+from agent_quiz import node_start_quiz, route_start_quiz, node_generate_questions, node_get_user_answers
 from bot_state import BotState
 from agent_query_topic import (node_init_user_query, node_health_agent, route_clarify_or_search, node_tools,
                                node_summary)
@@ -17,6 +20,9 @@ def create_health_bot_graph():
     workflow.add_node(node_health_agent.__name__, node_health_agent)
     workflow.add_node(node_tools.__name__, node_tools)
     workflow.add_node(node_summary.__name__, node_summary)
+    workflow.add_node(node_start_quiz.__name__, node_start_quiz)
+    workflow.add_node(node_generate_questions.__name__, node_generate_questions)
+    workflow.add_node(node_get_user_answers.__name__, node_get_user_answers)
 
     # Add edges
     workflow.add_edge(START, node_init_user_query.__name__)
@@ -30,7 +36,17 @@ def create_health_bot_graph():
         }
     )
     workflow.add_edge(node_tools.__name__, node_health_agent.__name__)
-    workflow.add_edge(node_summary.__name__, END)
+    workflow.add_edge(node_summary.__name__, node_start_quiz.__name__)
+    workflow.add_conditional_edges(
+        node_start_quiz.__name__,
+        route_start_quiz,
+        {
+            node_generate_questions.__name__: node_generate_questions.__name__,
+            "end": END
+        }
+    )
+    workflow.add_edge(node_generate_questions.__name__, node_get_user_answers.__name__)
+    workflow.add_edge(node_get_user_answers.__name__, END)
 
     checkpointer = MemorySaver()
     graph = workflow.compile(checkpointer=checkpointer)
@@ -56,11 +72,34 @@ def main():
         user_query = input(user_message)
         init_state = { "user_query": user_query }
         config = {"configurable": {"thread_id": "1"}}
-        final_state = graph.invoke(init_state, config)
-        # for message in final_state["messages"]:
-        #     print(f"Message: {message}")
-        print("===== Summary of the information =====")
-        print(final_state["search_summary"])
+        # Wait for the summary and print
+        for event in graph.stream(init_state, config, stream_mode="updates"):
+            if 'node_summary' in event:
+                print("===== Summary of the information =====")
+                print(event['node_summary']["search_summary"])
+
+        # Get the user select on whether to start the quiz
+        start_quiz = input("Want to test your knowledge? yes(y) or no(n): ")
+        while start_quiz.lower() not in ["y", "yes", "n", "no"]:
+            start_quiz = input("Want to test your knowledge? yes(y) or no(n): ")
+
+        if start_quiz.lower() != "y":
+            return
+
+        for event in graph.stream(Command(resume=start_quiz), config, stream_mode="updates"):
+            if 'node_generate_questions' in event:
+                mcq = event['node_generate_questions']['mcq']
+                print(mcq["question"])
+                for option in mcq["options"]:
+                    print(option)
+
+        user_answer = input("Please select the correct answer (A/B/C/D):\n")
+        while user_answer.lower() not in ["a", "b", "c", "d"]:
+            user_answer = input("Please select the correct answer (A/B/C/D):\n")
+        for event in graph.stream(Command(resume=user_answer), config, stream_mode="updates"):
+            if 'node_get_user_answers' in event:
+                print(event['node_get_user_answers']['result'])
+
     except Exception as e:
         print(f"Error: {e}")
         logger.error(traceback.format_exc())

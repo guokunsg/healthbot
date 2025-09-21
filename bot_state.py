@@ -1,3 +1,5 @@
+from typing import Any
+
 from langgraph.graph import MessagesState
 
 
@@ -12,3 +14,9 @@ class BotState(MessagesState):
     search_query: str
     # The summary of the search result
     search_summary: str
+    # Whether the user selected to start the quiz
+    start_quiz: bool
+    # MCQ questions and answers from the AI
+    mcq: dict[str, Any]
+    # The result message
+    result: str
