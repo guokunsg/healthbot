@@ -83,7 +83,7 @@ def main():
         while start_quiz.lower() not in ["y", "yes", "n", "no"]:
             start_quiz = input("Want to test your knowledge? yes(y) or no(n): ")
 
-        if start_quiz.lower() != "y":
+        if start_quiz.lower() != "y" and start_quiz.lower() != "yes":
             return
 
         for event in graph.stream(Command(resume=start_quiz), config, stream_mode="updates"):

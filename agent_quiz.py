@@ -1,5 +1,5 @@
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 import os
 from dotenv import load_dotenv
 from langgraph.types import interrupt
@@ -23,7 +23,7 @@ based on a summary of health-related content provided by the user.
 
 ## Your entire response must be a valid JSON object with the following fields:
 1. "question": "Question to the user",
-2. "options": ["Option A", "Option B", "Option C", "Option D"],
+2. "options": ["A) Option A", "B) Option B", "C) Option C", "D) Option D"],
 3. "answer": "A",  // or "B", "C", or "D"
 4. "reason": "Brief explanation for the correct answer, based only on the summary"
 
@@ -41,8 +41,10 @@ assert os.getenv('OPENAI_API_KEY') is not None
 assert os.getenv('TAVILY_API_KEY') is not None
 
 def create_llm():
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
+    llm = ChatOllama(
+        model="qwen3:14b",
+        validate_model_on_init=True,
+        reasoning=False,
         temperature=0.0,
     )
     return llm
@@ -79,8 +81,4 @@ def node_get_user_answers(state: BotState) -> BotState:
     if user_answer.lower() == mcq['answer'].lower():
         return { "result": f"Correct!\n{mcq['reason']}" }
     return { "result": f"Incorrect! Correct answer is {mcq['answer']}.\n{mcq['reason']}" }
-
-
-
-
 
